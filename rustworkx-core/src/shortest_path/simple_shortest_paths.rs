@@ -239,7 +239,7 @@ pub fn dijkstra_shortest_path_with_excluded_prefix<G, F, K>(
     start: G::NodeId,
     target: G::NodeId,
     mut edge_cost:F,
-    excluded_prefix: &HashSet<G::NodeId>,
+    excluded_prefix:  Option<HashMap<G::NodeId,G::NodeId> >,
 ) -> (Vec<G::NodeId>, K)
 where
     G: Visitable + IntoEdges,
@@ -252,6 +252,7 @@ where
     let mut scores: HashMap<G::NodeId, K> = HashMap::new();
     let mut pathnodes: HashMap<G::NodeId, NodeData<G::NodeId,K>> = HashMap::new();
     let mut visit_next: BinaryHeap<MinScored< K, G::NodeId> > = BinaryHeap::new();
+    let mut cur_edge : HashMap<G::NodeId,G::NodeId> = HashMap::new();
     visit_next.push(MinScored(K::default(), start));
     scores.insert(start, K::default());
     pathnodes.insert(start, NodeData {
@@ -271,8 +272,20 @@ where
             let v = edge.target();
 
             // don't traverse the nodes marked for exclusion, or which have been visited.
-            if visit_map.is_visited(&v) || excluded_prefix.contains(&v){
+            if visit_map.is_visited(&v) {
                 continue;
+            }
+            else {
+                cur_edge.insert(node,v);
+                match excluded_prefix {
+                    Some(ref excluded_prefix) => {
+                        if cur_edge ==  *excluded_prefix {
+                         continue;
+                        }
+                    },
+                    None => {}
+                }
+                
             }
 
             let edge_weight = edge_cost(edge);
@@ -351,7 +364,7 @@ where
         start,
         target,
         |e| {*e.weight()},
-        &HashSet::new());
+         None);
 
 
     println!("Inserting path of cost {:?} in listA", min_cost);
@@ -376,7 +389,6 @@ where
         // from x[j] to target after removing prohibited edges (see above).
 
         let mut current_path = listA[i-1].to_owned();                                   // current path is the last added path in listA
-        let mut excluded_edges_map: HashMap<(NodeIndex, NodeIndex), K> = HashMap::new();                // map to keep track of removed edges, which are added back later
         let mut root_cost = K::default();                                                           // keep track of the cost of current path till diversion point.
 
         for j in 0usize..current_path.len() - 1 {
@@ -384,28 +396,17 @@ where
             let root_node = current_path[j];
             let next_edge = graph.find_edge(root_node, current_path[j+1]).unwrap();
             let next_edge_cost = *graph.edge_weight(next_edge).unwrap();
+            let mut excluded_edges_map:  HashMap<NodeIndex,NodeIndex> = HashMap::new();  
 
-            for path in listA.iter() {
-                // for each path that agrees with current path till node j,
-                // remove the neighbor of j^{th} node on that path.
-                if path.len() < j+1 {
-                    continue;
-                }
+            excluded_edges_map.insert(root_node, current_path[j + 1]); 
 
-                if path[0..=j] == current_path[0..=j] {
-                    if let Some(edge) = graph.find_edge(root_node, path[j+1]) {
-                        excluded_edges_map.insert((root_node, path[j + 1]), *graph.edge_weight(edge).unwrap());
-                        graph.remove_edge(edge);
-                    }
-                }
-            }
             // find the shortest path form root_node to target in the graph after removing prohibited edges.
             let (shortest_root_target_path, path_cost) = dijkstra_shortest_path_with_excluded_prefix(
                 &*graph,
                 root_node,
                 target,
                 |e| {*e.weight()},
-                &HashSet::from_iter(current_path[0..=j].to_vec().into_iter()),
+                Some(excluded_edges_map.clone()),
             );
 
             if shortest_root_target_path.len() > 0 {
@@ -414,17 +415,17 @@ where
                 println!("new_path {:?}", new_path);
                 new_path.extend_from_slice(&shortest_root_target_path);
                 println!("Adding path of cost {:?} to listB", root_cost + path_cost);
-                listB.push(MinScored(root_cost + path_cost, new_path));
+                if ! listA.contains(&new_path) {
+                    listB.push(MinScored(root_cost + path_cost, new_path));
+                }
+                else {
+                    println!("Path already found");
+                }
             }
 
             // add current edge cost to the root cost
             root_cost = root_cost + next_edge_cost;
         };
-
-        // finally restore the edges we removed to reset the graph for next iteration
-        for (edge, wt) in &excluded_edges_map {
-            graph.add_edge(edge.0, edge.1, *wt);
-        }
 
         // remove the path of least cost from listB, and add to listA
         if let Some(MinScored(path_cost, min_path)) = listB.pop() {
